@@ -15,7 +15,7 @@ from multiprocessing import Process, Pipe, set_start_method
 from threading import Thread
 import time
 
-from agent import ConvAgent
+from agent import LSTMAgent
 from env_interface import EmbeddingInterfaceWrapper, BeaconEnvironmentInterface
 from environment import SCEnvironmentWrapper
 
@@ -59,11 +59,11 @@ class Learner:
         self.weights_path = os.path.join(self.weights_dir, 'model.ckpt')
         self.epoch = 0
 
-        self.discount_factor = 0.5
+        self.discount_factor = 0.9
         self.td_lambda = 0.9
 
         self.env_interface = EmbeddingInterfaceWrapper(BeaconEnvironmentInterface())
-        self.agent = ConvAgent(self.env_interface)
+        self.agent = LSTMAgent(self.env_interface)
 
         with self.agent.graph.as_default():
             self.rewards_input = tf.placeholder(tf.float32, [None], name="rewards")  # T
@@ -107,39 +107,22 @@ class Learner:
         # self.trajectory_queue.append(trajectory)
 
     def update_model(self, rollouts):
-        # TODO: batch this
-        # print("[Learner] Starting update model, number of rollouts is, ", len(rollouts))
         for i in range(len(rollouts)):
             rollout = rollouts[i]
-            # if i == 0:
-            #     print("Rewards", rollout.rewards)
-            # print("Actions", [a.index for a in rollout.actions])
-            # print("Actions", [a.spatial_coords for a in rollout.actions])
-            # print("Probs", rollout.log_action_probs)
-            #     print("First state:", rollout.states[0]['screen'])
-            #     print("Second state:", rollout.states[1]['screen'])
-            #     print("Third state:", rollout.states[1]['screen'])
-            #     print("Last state:", rollout.states[-1]['screen'])
-
             if rollout.done:
                 feed_dict = {
                     self.rewards_input: rollout.rewards,
-                    self.behavior_log_probs_input: [rollout.log_action_probs],
-                    **self.agent.get_feed_dict(rollout.states + [rollout.bootstrap_state],
-                                               rollout.memories + [rollout.bootstrap_memory],
-                                               rollout.masks,
-                                               rollout.actions)
+                    **self.agent.get_feed_dict(rollout.states, rollout.masks, rollout.actions, rollout.bootstrap_state)
                 }
+
                 loss, _ = self.session.run([self.loss, self.train_op], feed_dict=feed_dict)
 
         self.epoch += 1
-        # print("[Learner] Finished update model, logging")
         if self.epoch % 50 == 0:
             self.save_model()
         with open('rewards.txt', 'a+') as f:
             for r in rollouts:
                 f.write('%d\n' % r.total_reward())
-        # print("[Learner] Done logging")
 
     def save_model(self):
         """
@@ -178,9 +161,8 @@ class Learner:
         discounts = tf.ones((num_steps, 1)) * self.discount_factor
         rewards = tf.expand_dims(self.rewards_input, axis=1)
 
-        all_values = self.agent.train_values()
-        values = tf.expand_dims(all_values[:-1], axis=1)
-        bootstrap = tf.expand_dims(all_values[-1], axis=0)
+        values = tf.expand_dims(self.agent.train_values(), axis=1)
+        bootstrap = tf.expand_dims(self.agent.bootstrap_value(), axis=0)
         glr = trfl.generalized_lambda_returns(rewards, discounts, values, bootstrap, lambda_=self.td_lambda)
         advantage = tf.squeeze(glr - values)
 
@@ -192,7 +174,7 @@ class Learner:
 
 class Actor:
     def __init__(self, pipe, env_interface):
-        mineral_env_config = {
+        env_kwargs = {
             "map_name": "MoveToBeacon",
             "visualize": False,
             "step_mul": 64,
@@ -204,7 +186,7 @@ class Actor:
                 action_space=actions.ActionSpace.FEATURES,
                 use_feature_units=True)}
         self.env_interface = env_interface
-        self.agent = ConvAgent(self.env_interface)
+        self.agent = LSTMAgent(self.env_interface)
         with self.agent.graph.as_default():
             self.session = self.agent.session
             self.session.run(tf.global_variables_initializer())
@@ -216,7 +198,10 @@ class Actor:
                             for tensor in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
 
         self.env_interface = env_interface
-        self.env = SCEnvironmentWrapper(self.env_interface, env_kwargs=mineral_env_config)
+        self.env = SCEnvironmentWrapper(self.env_interface, env_kwargs=env_kwargs)
+        # self.env = MultipleEnvironment(lambda: SCEnvironmentWrapper(self.env_interface, env_kwargs=env_kwargs),
+        #                                   num_instance=1)
+
         self.curr_iteration = 0
         self.pipe = pipe
 
@@ -225,45 +210,23 @@ class Actor:
         Repeatedly generates actions from the agent and steps in the environment until all environments have reached a
         terminal state. Returns each trajectory in the form of rollouts.
         """
-        # print("Starting generate trajectory")
-        agent_states, agent_masks, _, dones = self.env.reset()
+        states, masks, _, _ = self.env.reset()
+        memory = None
         rollout = Rollout()
-        memory = self.agent.get_initial_memory(1)
 
-        while not all(dones):
-            # print("Stepping")
-            agent_actions, next_memory, log_action_prob = self.agent.step(agent_states, agent_masks, memory)
-            # print("finish agent stepping")
-            env_action_lists = self.env_interface.convert_actions(agent_actions)
+        while True:
+            action_indices, memory = self.agent.step(states, masks, memory)
+            new_states, new_masks, rewards, dones = self.env.step(action_indices)
 
-            # print("finish agent stepping")
-            # Feed actions to environment
-            # print("Env stepping")
-            next_agent_states, next_masks, rewards, dones = self.env.step(env_action_lists)
-            # print("finish env stepping")
-
-            # Record info in rollouts
-            rollout.add_step(state=agent_states[0],
-                             memory=memory[0],
-                             mask=agent_masks[0],
-                             action=agent_actions[0],
-                             reward=rewards[0],
-                             done=dones[0],
-                             log_action_prob=log_action_prob[0]
-                             )
-            # print("Finish adding to rollout")
-            agent_states, agent_masks = next_agent_states, next_masks
-            memory = next_memory
-
-        # print("=======================")
-        # print(rollout.log_action_probs)
-        # print(np.array([a.index for a in rollout.actions]))
-        # print(np.array([a.spatial_coords for a in rollout.actions]))
-        # print(np.array(rollout.masks))
-        # Add terminal state in rollbacks
-        rollout.add_step(state=agent_states[0], memory=memory[0])
-        print("================== Iteration %d, reward: [%.1f]" % (self.curr_iteration, rollout.total_reward()))
+            rollout.add_step(states[0], action_indices[0], rewards[0], masks[0], dones[0])
+            states = new_states
+            masks = new_masks
+            if all(dones):
+                # Add in the done state for rollouts which just finished for calculating the bootstrap value.
+                rollout.add_step(states[0])
+                break
         self.curr_iteration += 1
+        print("=============== Reward on iteration %d is [%.1f]" % (self.curr_iteration, rollout.total_reward()))
         return rollout
 
     def get_params(self):
@@ -301,19 +264,17 @@ class Rollout:
         actions: List of action indices generated by the agent's step function.
         rewards: List of scalar rewards, representing the reward recieved after performing the corresponding action at
             the corresponding state.
+        masks: List of masks generated by the environment.
         bootstrap_state: A numpy array of shape [*state_shape]. Represents the terminal state in the trajectory and is
             used to bootstrap the advantage estimation.
     """
     def __init__(self):
         self.states = []
-        self.log_action_probs = []
-        self.masks = []
         self.rewards = []
         self.actions = []
-        self.memories = []
+        self.masks = []
         self.should_bootstrap = None
         self.bootstrap_state = None
-        self.bootstrap_memory = None
         self.done = False
 
     def total_reward(self):
@@ -322,30 +283,26 @@ class Rollout:
         """
         return np.sum(self.rewards)
 
-    def add_step(self, state, memory, mask=None, action=None, reward=None, done=None, log_action_prob=None):
+    def add_step(self, state, action=None, reward=None, mask=None, done=None):
         """ Saves a step generated by the agent to the rollout.
         Once `add_step` sees a `done`, it stops adding subsequent steps. However, make sure to call `add_step` at
         least one more time in order to record the terminal state for bootstrapping. Only leave the keyword parameters
         as None if feeding in the terminal state.
         :param state: The state which the action was taken in.
-        :param memory: The memory associated with the state.
         :param action: The action index of the action taken, generated by the agent.
-        :param log_action_prob: The log probability of the action at the time.
         :param reward: The reward recieved from the environment after taken the action.
         :param mask: The action mask that was used during the step.
         :param done: Whether the action resulted in the environment reaching a terminal state
         """
         if not self.done:
             self.states.append(state)
-            self.masks.append(mask)
             self.actions.append(action)
             self.rewards.append(reward)
-            self.memories.append(memory)
-            self.log_action_probs.append(log_action_prob)
+            self.masks.append(mask)
             self.done = done
         elif self.bootstrap_state is None:
             self.bootstrap_state = state
-            self.bootstrap_memory = memory
+
 
 def main(_):
     learner = Learner(4, load_model=False)

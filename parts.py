@@ -1,11 +1,11 @@
 import tensorflow as tf
-import numpy as np
 
 
 def conv_body(state, filters=(16,), kernel_sizes=(3,), strides=(3,), output_size=64):
     """
     Assumes the state shape is 3 dimensional. Applies some number of convolution layers, followed by a single
     dense layer.
+
     :param state: Tensor of shape [channels, batch, x_dim, y_dim]
     :param filters: Tuple of filters sizes.
     :param kernel_sizes: Tuple of kernel sizes.
@@ -28,33 +28,42 @@ def conv_body(state, filters=(16,), kernel_sizes=(3,), strides=(3,), output_size
     return logits
 
 
-def actor_spatial_head(features, screen_dim, num_spatial_actions, name='actor_spatial'):
+def actor_spacial_head(features, sizes):
     """
     Feed forward network to calculate the spacial action probabilities.
-    :param name: Name of scope. Change name to have a different set of variables
+
     :param features: Tensor of shape [batch_size, num_features] inputs to the spacial_head
-    :param screen_dim: Number of units per distribution, corresponds to width / height of screen.
-    :param num_spatial_actions: Number of distributions over spatial coordinates for each x, y to produce.
+    :param sizes: List of integer sizes for spacial dimension sizes. Even indices are x dimensions and odd indices
+        are y dimensions.
+
     :return:
-        Tensor of shape [2, batch_size, screen_dim, num_spatial_actions]
+        spacial_x: A list containing a tensor of size [batch_size, x_dimension] for each x dimension.
+        spacial_y: A list containing a tensor of size [batch_size, y_dimension] for each y dimension.
     """
-    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
-        distributions = tf.layers.dense(features,
-                                        units=2 * num_spatial_actions * screen_dim,
-                                        activation=None)
-    return tf.nn.softmax(tf.reshape(distributions, [2, -1, screen_dim, num_spatial_actions]), axis=-2)
+    spacial_x = []
+    spacial_y = []
+    with tf.variable_scope('actor_spacial_x', reuse=tf.AUTO_REUSE):
+        for i in range(int(len(sizes) / 2)):
+            spacial_x.append(tf.layers.dense(features,
+                                             units=sizes[i * 2], activation=tf.nn.softmax, name='output%d' % i))
+    with tf.variable_scope('actor_spacial_y', reuse=tf.AUTO_REUSE):
+        for i in range(int(len(sizes) / 2)):
+            spacial_y.append(tf.layers.dense(features,
+                                             units=sizes[i * 2 + 1], activation=tf.nn.softmax, name='output%d' % i))
+    return spacial_x, spacial_y
 
 
-def actor_pointer_head(features, embeddings, num_heads, name='pointer_head'):
+def actor_pointer_head(features, embeddings, num_heads):
     """
     Feed forward network that performs attention on on the embeddings using features `num_head` times.
-    :param name: Name of scope. Change name to have a different set of variables
+
     :param features: Tensor of shape `[batch_size, num_features]`
     :param embeddings: Tensor of shape `[batch_size, num_units, embedding_size]`
     :param num_heads: An integer representing the number of separate softmax distributions to output.
+
     :return: A softmax distribution over the units in the embedding of shape `[batch_size, num_heads, num_units]`
     """
-    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope('pointer_head', reuse=tf.AUTO_REUSE):
         hidden_size = 50
         mapped_features = tf.layers.dense(features, hidden_size, activation=None, use_bias=False)
         mapped_embeddings = tf.layers.dense(embeddings, hidden_size, activation=None, use_bias=False)
@@ -73,28 +82,28 @@ def actor_pointer_head(features, embeddings, num_heads, name='pointer_head'):
         return probs / tf.reduce_sum(probs, axis=-1, keepdims=True)
 
 
-def actor_nonspatial_head(features, action_mask, num_actions, name='actor_nonspatial'):
+def actor_nonspacial_head(features, action_mask, num_actions):
     """
-    Feed forward network to produce the nonspatial action probabilities.
+    Feed forward network to produce the nonspacial action probabilities.
+
     :param features: Tensor of shape [batch_size, num_features]
     :param action_mask: Tensor of shape [batch_size, num_actions]
     :param num_actions: number of actions to produce.
-    :param name: Name of scope. Change name to have a different set of variables
     :return: Tensor of shape [batch_size, num_actions] of probability distributions.
     """
-    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope('actor_nonspacial', reuse=tf.AUTO_REUSE):
         probs = tf.layers.dense(features, units=num_actions, activation=tf.nn.softmax, name='output')
     masked = (probs + 1e-10) * action_mask
     return masked / tf.reduce_sum(masked, axis=1, keepdims=True)
 
 
-def value_head(features, name='critic'):
+def value_head(features):
     """
     Feed forward network to produce the state value.
-    :param name: Name of scope. Change name to have a different set of variables
+
     :param features: Tensor of shape [batch_size, num_features].
     :return: Tensor of shape [batch_size] of state values.
     """
-    with tf.variable_scope(name, reuse=tf.AUTO_REUSE):
+    with tf.variable_scope('critic', reuse=tf.AUTO_REUSE):
         features = tf.layers.dense(features, units=1, activation=None, name='output')
     return tf.squeeze(features, axis=-1)
