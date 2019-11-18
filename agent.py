@@ -215,6 +215,26 @@ class LSTMAgent(InterfaceAgent):
         unit_features = tf.reduce_sum(self.self_attention(self.unit_embeddings_input, bias=0), axis=1)
         return tf.concat([conv_features, unit_features], axis=1)
 
+    def log_prob_numpy(self, actions, nonspatial_probs, spatial_probs, unit_selection_probs):
+        """
+        :param actions: [(nonspatial, spatial, _, unit_selection_index)...]
+        :param spatial_probs: [2, num_spatial_actions T, 84]
+        :param nonspatial_probs: [T, num_actions]
+        :param unit_selection_probs: [T]
+        :return: [T]
+        """
+        log_probs = []
+        for i, action in enumerate(actions):
+            action_index, action_spatial, _, unit_index = action
+            log_prob = np.log(nonspatial_probs[i, action_index])
+            if action_index < self.num_screen_dims:  # Is a spatial action
+                x, y = action_spatial
+                log_prob += np.log(spatial_probs[0, action_index, i, x]) + np.log(spatial_probs[1, action_index, i, y])
+            elif self.num_screen_dims <= action_index < self.num_screen_dims + self.num_select_actions:
+                log_prob += np.log(unit_selection_probs[i][unit_index])
+            log_probs.append(log_prob)
+        return log_probs
+
     def step(self, states, masks, memory):
         """
         :param states: List of states of length batch size. In this case, state is a dict with keys:
@@ -240,8 +260,11 @@ class LSTMAgent(InterfaceAgent):
         spacial_probs_y = spacial_probs[self.num_screen_dims:]
 
         unit_coords = util.pad_stack([state['unit_coords'][:, :2] for state in states], pad_axis=0, stack_axis=0)
-        return self.sample_action_index_with_units(nonspacial_probs, spacial_probs_x,
-                                                   spacial_probs_y, selection_probs, unit_coords), next_lstm_state
+        sampled_action = self.sample_action_index_with_units(nonspacial_probs, spacial_probs_x, spacial_probs_y, selection_probs, unit_coords)
+
+        log_prob = self.log_prob_numpy(sampled_action, nonspacial_probs, np.stack([spacial_probs_x, spacial_probs_y]), selection_probs)
+        # TODO: check for unit embeddings
+        return sampled_action, next_lstm_state, log_prob
 
     def _lstm_step(self):
         state_tuple = tf.unstack(self.memory_input, axis=0)
