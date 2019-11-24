@@ -176,6 +176,11 @@ class ConvAgent(InterfaceAgent):
         return parts.value_head(self.features)
 
 
+def view_states(states):
+    plt.imshow(np.transpose(states[0]['screen'], [1, 2, 0]))
+    plt.show()
+
+
 class LSTMAgent(InterfaceAgent):
     def __init__(self, interface):
         super().__init__(interface)
@@ -231,7 +236,7 @@ class LSTMAgent(InterfaceAgent):
                 x, y = action_spatial
                 log_prob += np.log(spatial_probs[0, action_index, i, x]) + np.log(spatial_probs[1, action_index, i, y])
             elif self.num_screen_dims <= action_index < self.num_screen_dims + self.num_select_actions:
-                log_prob += np.log(unit_selection_probs[i][unit_index])
+                log_prob += np.log(unit_selection_probs[i][action_index - self.num_screen_dims][unit_index])
             log_probs.append(log_prob)
         return log_probs
 
@@ -261,8 +266,8 @@ class LSTMAgent(InterfaceAgent):
 
         unit_coords = util.pad_stack([state['unit_coords'][:, :2] for state in states], pad_axis=0, stack_axis=0)
         sampled_action = self.sample_action_index_with_units(nonspacial_probs, spacial_probs_x, spacial_probs_y, selection_probs, unit_coords)
-
         log_prob = self.log_prob_numpy(sampled_action, nonspacial_probs, np.stack([spacial_probs_x, spacial_probs_y]), selection_probs)
+
         # TODO: check for unit embeddings
         return sampled_action, next_lstm_state, log_prob
 

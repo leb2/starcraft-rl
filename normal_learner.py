@@ -1,115 +1,104 @@
-from multiprocessing import set_start_method
-
-import trfl
-from absl import app
-from absl import flags
-from pysc2.env import sc2_env
-from pysc2.lib import actions
+import vtrace as trfl
 import os
 import tensorflow as tf
-
-from agent import ConvAgent
-from env_interface import EmbeddingInterfaceWrapper, BeaconEnvironmentInterface
-from environment import SCEnvironmentWrapper
 from impala_master import Rollout
 
 
-class NormalActor:
-    def __init__(self, env_interface, load_model=False):
-        mineral_env_config = {
-            "map_name": "MoveToBeacon",
-            "visualize": False,
-            "step_mul": 64,
-            'game_steps_per_episode': None,
-            "agent_interface_format": sc2_env.AgentInterfaceFormat(
-                feature_dimensions=sc2_env.Dimensions(
-                    screen=84,
-                    minimap=84),
-                action_space=actions.ActionSpace.FEATURES,
-                use_feature_units=True)}
-        self.env_interface = env_interface
-        self.agent = ConvAgent(self.env_interface)
-        self.weights_dir = './weights'
-        self.weights_path = os.path.join(self.weights_dir, 'model.ckpt')
-        self.env_interface = env_interface
-        self.env = SCEnvironmentWrapper(self.env_interface, env_kwargs=mineral_env_config)
-        self.curr_iteration = 0
-        self.epoch = 0
-        self.discount_factor = 0.7
-        self.td_lambda = 0.9
+class ActorCriticLearner:
+    """ Implementation of generalized advantage actor critic for TensorFlow.
+    """
+    def __init__(self, environment, agent,
+                 run_name="temp",
+                 load_run_name=None,
+                 gamma=0.96,
+                 td_lambda=0.96,
+                 learning_rate=0.0003):
+        """
+        :param environment: An instance of `MultipleEnvironment` to be used to generate trajectories.
+        :param agent: An instance of `ActorCriticAgent` to be used to generate actions.
+        :param run_name: The directory to store rewards and weights in.
+        :param load_model: True if the model should be loaded from `save_dir`.
+        :param gamma: The discount factor.
+        :param td_lambda: The value of lambda used in generalized advantage estimation. Set to 1 to behave like
+            monte carlo returns.
+        """
+        self.env = environment
+        self.num_games = self.env.num_instances
+        self.agent = agent
+        self.discount_factor = gamma
+        self.td_lambda = td_lambda
 
+        project_root = os.path.dirname(os.path.realpath(__file__))
+        self.save_dir = os.path.join(project_root, 'saves', run_name)
+        self.code_dir = os.path.join(self.save_dir, 'code')
+        self.weights_dir = os.path.join(self.save_dir, 'weights')
+        self.weights_path = os.path.join(self.weights_dir, 'model.ckpt')
+
+        if load_run_name is None:
+            load_run_name = run_name
+        self.load_weights_path = os.path.join(project_root, 'saves', load_run_name, 'weights', 'model.ckpt')
+
+        if not os.path.exists(self.weights_dir):
+            os.makedirs(self.weights_dir)
+        if not os.path.exists(self.code_dir):
+            os.makedirs(self.code_dir)
+
+        os.system('cp -r ' + os.path.join(project_root, './*.py') + ' ' + self.code_dir)
+        self.rewards_path = os.path.join(self.save_dir, 'rewards.txt')
+
+        self.episode_counter = 0
+
+        self.rollouts = [Rollout() for _ in range(self.num_games)]
         with self.agent.graph.as_default():
+            self.rewards_input = tf.placeholder(tf.float32, [None])
+            self.loss = self._ac_loss()
+            self.train_op = tf.train.AdamOptimizer(learning_rate).minimize(self.loss)
             self.session = self.agent.session
             self.session.run(tf.global_variables_initializer())
-            self.rewards_input = tf.placeholder(tf.float32, [None], name="rewards")  # T
-            self.behavior_log_probs_input = tf.placeholder(tf.float32, [None, None], name="behavior_log_probs")  # T
             self.saver = tf.train.Saver()
-            self.loss = self._ac_loss()
-            self.train_op = tf.train.AdamOptimizer(0.0003).minimize(self.loss)
-            if load_model:
-                try:
-                    self._load_model()
-                except ValueError:
-                    print("Could not load model")
+            try:
+                self.load_model()
+            except ValueError:
+                pass
 
-            self.variable_names = [v.name for v in tf.trainable_variables()]
-            self.assign_placeholders = {t.name: tf.placeholder(t.dtype, t.shape)
-                                        for t in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)}
-            self.assigns = [tf.assign(tensor, self.assign_placeholders[tensor.name])
-                            for tensor in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
-            self.session.run(tf.global_variables_initializer())
+    def train_episode(self):
+        """ Trains the agent for single episode for each environment in the `MultipleEnvironment`.
+        Training is synchronized such that all training happens after all agents have finished acting in the
+        environment. Call this method in a loop to train the agent.
+        """
+        self.generate_trajectory()
+        for i in range(self.num_games):
+            rollout = self.rollouts[i]
+            if rollout.done:
+                feed_dict = {
+                    self.rewards_input: rollout.rewards,
+                    **self.agent.get_feed_dict(rollout.states, rollout.masks, rollout.actions, rollout.bootstrap_state)
+                }
+
+                loss, _ = self.session.run([self.loss, self.train_op], feed_dict=feed_dict)
+                self._log_data(rollout.total_reward())
+                self.rollouts[i] = Rollout()
 
     def generate_trajectory(self):
         """
         Repeatedly generates actions from the agent and steps in the environment until all environments have reached a
-        terminal state. Returns each trajectory in the form of rollouts.
+        terminal state. Stores the complete result from each trajectory in `rollouts`.
         """
-        agent_states, agent_masks, _, dones = self.env.reset()
-        rollout = Rollout()
-        memory = self.agent.get_initial_memory(1)
+        states, masks, _, _ = self.env.reset()
+        memory = None
+        while True:
+            action_indices, memory, log_probs = self.agent.step(states, masks, memory)
+            new_states, new_masks, rewards, dones = self.env.step(action_indices)
 
-        while not all(dones):
-            agent_actions, next_memory, log_action_prob = self.agent.step(agent_states, agent_masks, memory)
-            env_action_lists = self.env_interface.convert_actions(agent_actions)
-            next_agent_states, next_masks, rewards, dones = self.env.step(env_action_lists)
-            rollout.add_step(state=agent_states[0],
-                             memory=memory[0],
-                             mask=agent_masks[0],
-                             action=agent_actions[0],
-                             reward=rewards[0],
-                             done=dones[0],
-                             log_action_prob=log_action_prob[0]
-                             )
-            agent_states, agent_masks = next_agent_states, next_masks
-            memory = next_memory
-
-        rollout.add_step(state=agent_states[0], memory=memory[0])
-        print("================== Iteration %d, reward: [%.1f]" % (self.curr_iteration, rollout.total_reward()))
-        self.curr_iteration += 1
-        return rollout
-
-    def update_model(self, rollouts):
-        for i in range(len(rollouts)):
-            rollout = rollouts[i]
-            if rollout.done:
-                feed_dict = {
-                    self.rewards_input: rollout.rewards,
-                    self.behavior_log_probs_input: [rollout.log_action_probs],
-                    **self.agent.get_feed_dict(rollout.states + [rollout.bootstrap_state],
-                                               rollout.memories + [rollout.bootstrap_memory],
-                                               rollout.masks,
-                                               rollout.actions)
-                }
-                loss, _ = self.session.run([self.loss, self.train_op], feed_dict=feed_dict)
-
-        self.epoch += 1
-        # print("[Learner] Finished update model, logging")
-        if self.epoch % 50 == 0:
-            self.save_model()
-        with open('rewards.txt', 'a+') as f:
-            for r in rollouts:
-                f.write('%d\n' % r.total_reward())
-        # print("[Learner] Done logging")
+            for i, rollout in enumerate(self.rollouts):
+                rollout.add_step(states[i], action_indices[i], rewards[i], masks[i], dones[i])
+            states = new_states
+            masks = new_masks
+            if all(dones):
+                # Add in the done state for rollouts which just finished for calculating the bootstrap value.
+                for i, rollout in enumerate(self.rollouts):
+                    rollout.add_step(states[i])
+                return
 
     def save_model(self):
         """
@@ -118,25 +107,28 @@ class NormalActor:
         save_path = self.saver.save(self.session, self.weights_path)
         print("Model Saved in %s" % save_path)
 
-    def _load_model(self):
+    def load_model(self):
         """
         Loads the model from weights stored in the current `save_path`.
         """
-        self.saver.restore(self.session, self.weights_path)
+        self.saver.restore(self.session, self.load_weights_path)
         print('Model Loaded')
 
-    def train(self):
-        while True:
-            self.update_model([self.generate_trajectory()])
+    def _log_data(self, reward):
+        self.episode_counter += 1
+        with open(self.rewards_path, 'a+') as f:
+            f.write('%d\n' % reward)
+
+        if self.episode_counter % 50 == 0:
+            self.save_model()
 
     def _ac_loss(self):
         num_steps = tf.shape(self.rewards_input)[0]
         discounts = tf.ones((num_steps, 1)) * self.discount_factor
         rewards = tf.expand_dims(self.rewards_input, axis=1)
 
-        all_values = self.agent.train_values()
-        values = tf.expand_dims(all_values[:-1], axis=1)
-        bootstrap = tf.expand_dims(all_values[-1], axis=0)
+        values = tf.expand_dims(self.agent.train_values(), axis=1)
+        bootstrap = tf.expand_dims(self.agent.bootstrap_value(), axis=0)
         glr = trfl.generalized_lambda_returns(rewards, discounts, values, bootstrap, lambda_=self.td_lambda)
         advantage = tf.squeeze(glr - values)
 
@@ -144,18 +136,3 @@ class NormalActor:
         loss_critic = tf.reduce_mean(advantage ** 2)
         result = loss_actor + 0.5 * loss_critic
         return result
-
-
-def main(_):
-    env_interface = EmbeddingInterfaceWrapper(BeaconEnvironmentInterface())
-    learner = NormalActor(env_interface, load_model=False)
-    learner.train()
-
-    # learner = Learner(4, load_model=False)
-    # learner.train()
-
-
-if __name__ == "__main__":
-    set_start_method('spawn', force=True)
-    FLAGS = flags.FLAGS
-    app.run(main)

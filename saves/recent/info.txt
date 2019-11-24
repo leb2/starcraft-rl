@@ -1,0 +1,49 @@
+logtostderr, False
+alsologtostderr, False
+log_dir, 
+v, 0
+verbosity, 0
+stderrthreshold, fatal
+showprefixforinfo, True
+run_with_pdb, False
+pdb_post_mortem, False
+run_with_profiling, False
+profile_file, None
+use_cprofile_for_profiling, True
+only_check_args, False
+sc2_verbose_protocol, 0
+sc2_log_actions, False
+sc2_verbose, False
+sc2_version, None
+sc2_dev_build, False
+sc2_run_config, None
+render, True
+feature_screen_size, 84.000000,84.000000
+feature_minimap_size, 64.000000,64.000000
+rgb_screen_size, None
+rgb_minimap_size, None
+action_space, None
+disable_fog, False
+epsilon, False
+max_agent_steps, 0
+game_steps_per_episode, None
+max_episodes, 0
+step_mul, 8
+agent_race, random
+cuda, True
+parallel, 1
+save_replay_episodes, 0
+map, MoveToBeacon
+save_name, recent
+load_model, False
+gamma, 0.96
+learning_rate, 0.0003
+td_lambda, 0.96
+?, False
+help, False
+helpshort, False
+helpfull, False
+helpxml, False
+
+
+

@@ -15,8 +15,8 @@ args = parser.parse_args()
 save_path = os.path.join('saves/', args.name)
 rewards_path = os.path.join(save_path, 'rewards.txt')
 
-save_path = ""
-rewards_path = "rewards.txt"
+# rewards_path = "saves/TestRefactor/rewards.txt"
+rewards_path = os.path.join("saves",  args.name, "rewards.txt")
 
 rewards = []
 with open(rewards_path, 'r') as f:
@@ -45,3 +45,4 @@ print("Best average:", np.max(smoothed_rewards + [0]))
 print("Current average:", ([0] + smoothed_rewards)[-1])
 plt.plot(smoothed_rewards)
 plt.savefig(os.path.join(save_path, 'reward-plot.png'))
+plt.savefig(os.path.join("", 'reward-plot.png'))

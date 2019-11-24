@@ -1,12 +1,11 @@
 from functools import partial
-from absl import flags
-from pysc2.lib import point_flag
-from absl import app
+from pysc2.maps import lib
+import sys
 
 from pysc2.env import sc2_env
 import tensorflow as tf
 import numpy as np
-import trfl
+import vtrace as trfl
 import os
 
 from pysc2.lib import actions
@@ -16,8 +15,8 @@ from threading import Thread
 import time
 
 from agent import LSTMAgent
-from env_interface import EmbeddingInterfaceWrapper, BeaconEnvironmentInterface
-from environment import SCEnvironmentWrapper
+from env_interface import EmbeddingInterfaceWrapper, BeaconEnvironmentInterface, TrainMarines
+from environment import SCEnvironmentWrapper, SCSingleEnvironment
 
 
 def run_actor(actor_factory):
@@ -25,6 +24,29 @@ def run_actor(actor_factory):
     while True:
         actor.get_params()
         actor.send_trajectory(actor.generate_trajectory())
+
+
+class StalkersVsRoachesMap(lib.Map):
+    directory = "mini_games"
+    download = "https://github.com/deepmind/pysc2#get-the-maps"
+    players = 1
+    score_index = 0
+    game_steps_per_episode = 0
+    step_mul = 8
+
+
+class EconomicRLTrainingMap(lib.Map):
+    directory = "mini_games"
+    download = "https://github.com/deepmind/pysc2#get-the-maps"
+    players = 1
+    score_index = 0
+    game_steps_per_episode = 0
+    step_mul = 8
+
+name = 'StalkersVsRoaches'
+globals()[name] = type(name, (StalkersVsRoachesMap,), dict(filename=name))
+name = 'EconomicRLTraining'
+globals()[name] = type(name, (EconomicRLTrainingMap,), dict(filename=name))
 
 
 def learn(learner, pipe):
@@ -49,42 +71,81 @@ def learn(learner, pipe):
 
 
 class Learner:
-    def __init__(self, num_actors, load_model=False):
+    def __init__(self, num_actors, env_kwargs, env_interface, run_name='temp', load_name=None):
         self.num_actors = num_actors
         self.pipes = []
         self.processes = []
         self.threads = []
         self.trajectory_queue = []
-        self.weights_dir = './weights'
+
+        self.name = run_name
+        if load_name is None:
+            self.load_name = run_name
+        else:
+            self.load_name = load_name
+
+        project_root = os.path.dirname(os.path.realpath(__file__))
+        self.save_dir = os.path.join(project_root, 'saves', run_name)
+        self.weights_path_load = os.path.join(project_root, 'saves', self.load_name, 'weights', 'model.ckpt')
+
+        self.code_dir = os.path.join(self.save_dir, 'code')
+        self.weights_dir = os.path.join(self.save_dir, 'weights')
         self.weights_path = os.path.join(self.weights_dir, 'model.ckpt')
+        # self.replay_dir = os.path.join(self.load_name, 'replays')
+
+        # body_keywords = ["pointer_head/dense/", "pointer_head/dense_1/", "shared", "lstm"]
+        if not os.path.exists(self.weights_dir):
+            os.makedirs(self.weights_dir)
+        if not os.path.exists(self.code_dir):
+            os.makedirs(self.code_dir)
+        # if not os.path.exists(self.replay_dir):
+        #     os.makedirs(self.replay_dir)
+
+        os.system('cp -r ' + os.path.join(project_root, './*.py') + ' ' + self.code_dir)
+        self.rewards_path = os.path.join(self.save_dir, 'rewards.txt')
+
         self.epoch = 0
+        self.env_kwargs = env_kwargs
+        # self.env_kwargs['replay_dir'] = self.replay_dir
+        print("Asdfasd")
+        print(self.env_kwargs)
 
         self.discount_factor = 0.95
         self.td_lambda = 0.95
 
-        self.env_interface = EmbeddingInterfaceWrapper(BeaconEnvironmentInterface())
+        self.env_interface = env_interface
         self.agent = LSTMAgent(self.env_interface)
 
         with self.agent.graph.as_default():
             self.rewards_input = tf.placeholder(tf.float32, [None], name="rewards")  # T
             self.behavior_log_probs_input = tf.placeholder(tf.float32, [None], name="behavior_log_probs")  # T
-            # self.loss = self._ac_loss()
-            self.loss = self._impala_loss()
+            self.loss = self._ac_loss()
+            # self.loss = self._impala_loss()
+
+            # head_variables = [v for v in tf.trainable_variables() if "shared" not in v.name]
+            # for var in head_variables:
+            #     print(var)
+            #
+            # print("body variables are")
+            # body_variables = [v for v in tf.trainable_variables() if "shared" in v.name]
+            # for var in body_variables:
+            #     print(var)
+
             self.train_op = tf.train.AdamOptimizer(0.0003).minimize(self.loss)
             self.session = self.agent.session
             self.session.run(tf.global_variables_initializer())
             self.saver = tf.train.Saver()
-            if load_model:
-                try:
-                    self._load_model()
-                except ValueError:
-                    print("Could not load model")
+            try:
+                self._load_model()
+            except Exception as e:
+                print(e)
+                print("Could not load model")
 
     def start_children(self):
         for process_id in range(self.num_actors):
             parent_conn, child_conn = Pipe()
             self.pipes.append(parent_conn)
-            p = Process(target=run_actor, args=(partial(Actor, child_conn, self.env_interface),))
+            p = Process(target=run_actor, args=(partial(Actor, child_conn, self.env_interface, self.env_kwargs),))
             self.processes.append(p)
             p.start()
 
@@ -112,7 +173,7 @@ class Learner:
             if rollout.done:
                 feed_dict = {
                     self.rewards_input: rollout.rewards,
-                    self.behavior_log_probs_input: rollout.log_probs,
+                    # self.behavior_log_probs_input: rollout.log_probs,
                     **self.agent.get_feed_dict(rollout.states, rollout.masks, rollout.actions, rollout.bootstrap_state)
                 }
 
@@ -121,7 +182,7 @@ class Learner:
         self.epoch += 1
         if self.epoch % 50 == 0:
             self.save_model()
-        with open('rewards.txt', 'a+') as f:
+        with open(self.rewards_path, 'a+') as f:
             for r in rollouts:
                 f.write('%d\n' % r.total_reward())
 
@@ -136,8 +197,8 @@ class Learner:
         """
         Loads the model from weights stored in the current `save_path`.
         """
-        self.saver.restore(self.session, self.weights_path)
-        print('Model Loaded')
+        self.saver.restore(self.session, self.weights_path_load)
+        print('Model Loaded from ', self.weights_path_load)
 
     def _impala_loss(self):
         num_steps = tf.shape(self.rewards_input)[0]
@@ -173,32 +234,20 @@ class Learner:
 
 
 class Actor:
-    def __init__(self, pipe, env_interface):
-        env_kwargs = {
-            "map_name": "CollectMineralShards",
-            "visualize": False,
-            "step_mul": 8,
-            'game_steps_per_episode': None,
-            "agent_interface_format": sc2_env.AgentInterfaceFormat(
-                feature_dimensions=sc2_env.Dimensions(
-                    screen=84,
-                    minimap=84),
-                action_space=actions.ActionSpace.FEATURES,
-                use_feature_units=True)}
+    def __init__(self, pipe, env_interface, env_kwargs):
         self.env_interface = env_interface
         self.agent = LSTMAgent(self.env_interface)
         with self.agent.graph.as_default():
             self.session = self.agent.session
             self.session.run(tf.global_variables_initializer())
             self.variable_names = [v.name for v in tf.trainable_variables()]
-
             self.assign_placeholders = {t.name: tf.placeholder(t.dtype, t.shape)
                                         for t in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)}
             self.assigns = [tf.assign(tensor, self.assign_placeholders[tensor.name])
                             for tensor in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)]
 
         self.env_interface = env_interface
-        self.env = SCEnvironmentWrapper(self.env_interface, env_kwargs=env_kwargs)
+        self.env = SCSingleEnvironment(self.env_interface, env_kwargs=env_kwargs)
         # self.env = MultipleEnvironment(lambda: SCEnvironmentWrapper(self.env_interface, env_kwargs=env_kwargs),
         #                                   num_instance=1)
 
@@ -230,27 +279,13 @@ class Actor:
         return rollout
 
     def get_params(self):
-        # print("[ACTOR] requesting params")
         self.pipe.send(("get_params", None))
-        # print("[ACTOR] waiting for params")
         names_to_params = self.pipe.recv()
-        # print("[ACTOR] got params")
-
-        # for key, value in names_to_params.items():
-        #     print("KEY: ", key, ", ", value.shape)
 
         with self.agent.graph.as_default():
-            # n = "actor_spatial_x/dense/kernel:0"
             self.session.run(self.assigns, feed_dict={
                 self.assign_placeholders[name]: names_to_params[name] for name in self.variable_names
             })
-            # for var in tf.
-            # for var in tf.trainable_variables():
-            #     print(var.name)
-            #     if var.name == n:
-            #         print("kernel sum is ", np.sum(self.session.run(var)))
-
-        # print("[ACTOR] Finished updating params")
 
     def send_trajectory(self, trajectory):
         # print("[ACTOR] sending trajectory:")
@@ -280,7 +315,7 @@ class Rollout:
 
     def total_reward(self):
         """
-        :return: The current sum of rewards recieved in the trajectory.
+        :return: The current sum of rewards received in the trajectory.
         """
         return np.sum(self.rewards)
 
@@ -305,16 +340,4 @@ class Rollout:
             self.done = done
         elif self.bootstrap_state is None:
             self.bootstrap_state = state
-
-
-def main(_):
-    learner = Learner(4, load_model=False)
-    learner.train()
-
-
-if __name__ == "__main__":
-    set_start_method('spawn', force=True)
-    FLAGS = flags.FLAGS
-    app.run(main)
-
 

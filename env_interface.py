@@ -4,12 +4,18 @@ import numpy as np
 from pysc2.lib import static_data
 from pysc2.lib import actions as pysc2_actions
 from pysc2.lib.features import FeatureUnit, PlayerRelative
+import matplotlib.pyplot as plt
 
 
 class ParamType(Enum):
     SPACIAL = 1
     SELECT_UNIT = 2
     NO_PARAMS = 3
+
+
+def view_states(states):
+    plt.imshow(np.transpose(states[0]['screen'], [1, 2, 0]))
+    plt.show()
 
 
 class EnvironmentInterface(ABC):
@@ -112,7 +118,7 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
 
     def _get_unit_embeddings(self, timestep, useful_columns):
         unit_info = np.array(timestep.observation.feature_units)
-        if True or unit_info.shape[0] == 0:  # TODO: Undo that
+        if unit_info.shape[0] == 0:
             # Set to 1 instead of 0 so no empty embedding situation. Zeros are treated as masked so this is okay.
             return np.zeros((1, self.unit_embedding_size))
         adjusted_info = unit_info[:, np.array(useful_columns)]
