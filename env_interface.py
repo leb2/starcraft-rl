@@ -74,7 +74,7 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
 
     def __init__(self, interface):
         self.interface = interface
-        self.unit_embedding_size = len(self._get_embedding_columns()) + len(static_data.UNIT_TYPES)
+        self.unit_embedding_size = len(self._get_embedding_columns()) + len(static_data.UNIT_TYPES) + 1
 
         self.state_shape = self.interface.state_shape
         self.screen_dimensions = self.interface.screen_dimensions
@@ -118,14 +118,16 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
 
     def _get_unit_embeddings(self, timestep, useful_columns):
         unit_info = np.array(timestep.observation.feature_units)
-        if unit_info.shape[0] == 0:
+        if True or unit_info.shape[0] == 0:
             # Set to 1 instead of 0 so no empty embedding situation. Zeros are treated as masked so this is okay.
             return np.zeros((1, self.unit_embedding_size))
         adjusted_info = unit_info[:, np.array(useful_columns)]
 
-        num_unit_types = len(static_data.UNIT_TYPES)
+        unit_types_with_beacon = static_data.UNIT_TYPES + [317]
+        num_unit_types = len(unit_types_with_beacon)
+
         blizzard_unit_type = unit_info[:, FeatureUnit.unit_type]
-        pysc2_unit_type = [static_data.UNIT_TYPES.index(t) for t in blizzard_unit_type]
+        pysc2_unit_type = [unit_types_with_beacon.index(t) for t in blizzard_unit_type]
         one_hot_unit_types = np.eye(num_unit_types)[pysc2_unit_type]
 
         unit_vector = np.concatenate([adjusted_info, one_hot_unit_types], axis=-1)

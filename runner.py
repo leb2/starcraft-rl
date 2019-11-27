@@ -14,13 +14,13 @@ from normal_learner import ActorCriticLearner
 env_kwargs = {
     # "map_name": "EconomicRLTraining",
     # "map_name": "StalkersVsRoaches",
-    # "map_name": "MoveToBeacon",
+    "map_name": "MoveToBeacon",
     # "map_name": "CollectMineralShards",
-    "map_name": "BuildMarines",
+    # "map_name": "BuildMarines",
     "visualize": False,
     "step_mul": 8,
     'game_steps_per_episode': None,
-    'save_replay_episodes': 1,
+    'save_replay_episodes': 0,
     'replay_dir': 'saves/',
     "agent_interface_format": sc2_env.AgentInterfaceFormat(
         feature_dimensions=sc2_env.Dimensions(
@@ -31,10 +31,9 @@ env_kwargs = {
 
 
 def main(_):
-    env_interface = EmbeddingInterfaceWrapper(TrainMarines())
-    # env_interface = EmbeddingInterfaceWrapper(BeaconEnvironmentInterface())
-
-    learner = Learner(1, env_kwargs, env_interface, run_name="BuildMarines2")
+    # env_interface = EmbeddingInterfaceWrapper(TrainMarines())
+    env_interface = EmbeddingInterfaceWrapper(BeaconEnvironmentInterface())
+    learner = Learner(16, env_kwargs, env_interface, run_name="ImpBeacon1")
     learner.train()
 
     # Refresh environment every once in a while to deal with memory leak

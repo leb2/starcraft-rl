@@ -8,9 +8,9 @@ from pysc2.lib import point_flag
 from pysc2.maps import lib
 
 import env_interface as interfaces
-from agent import LSTMAgent
 from environment import MultipleEnvironment, SCEnvironmentWrapper
-from normal_learner import ActorCriticLearner
+from tflearner import ActorCriticLearner
+from agent2 import InterfaceAgent, ConvAgent, LSTMAgent
 
 if __name__ == '__main__':
     FLAGS = flags.FLAGS
@@ -32,7 +32,7 @@ if __name__ == '__main__':
     flags.DEFINE_integer("max_agent_steps", 0, "Total agent steps.")
     flags.DEFINE_integer("game_steps_per_episode", None, "Game steps per episode.")
     flags.DEFINE_integer("max_episodes", 0, "Total episodes.")
-    flags.DEFINE_integer("step_mul", 24, "Game steps per agent step.")
+    flags.DEFINE_integer("step_mul", 8, "Game steps per agent step.")
 
     flags.DEFINE_enum("agent_race", "random", sc2_env.Race._member_names_,  # pylint: disable=protected-access
                       "Agent 1's race.")
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     flags.DEFINE_integer("parallel", 1, "How many instances to run in parallel.")
     flags.DEFINE_integer("save_replay_episodes", 0, "How many episodes per replay save, 0 for no saves.")
 
-    # flags.DEFINE_string("map", None, "Name of a map to use.")
+    flags.DEFINE_string("map", None, "Name of a map to use.")
     flags.DEFINE_string("save_name", "recent", "Save run information under ./saves/<save_name>")
 
     flags.DEFINE_bool("load_model", False, "Whether to load the previous run's model")
@@ -49,18 +49,26 @@ if __name__ == '__main__':
     flags.DEFINE_float("learning_rate", 0.0003, "Learning rate")
     flags.DEFINE_float("td_lambda", 0.96, "Lambda value for generalized advantage estimation")
 
+    flags.mark_flag_as_required("map")
+
+
+class StalkersVsRoachesMap(lib.Map):
+    directory = "mini_games"
+    download = "https://github.com/deepmind/pysc2#get-the-maps"
+    players = 1
+    score_index = 0
+    game_steps_per_episode = 0
+    step_mul = 8
+
 
 def main(unused_argv):
-    map_name = "MoveToBeacon"
-    save_name = "Beacon5"
-    load_run_name = None
-    num_instances = 8
-    step_mul = 8
-    load_body_only = False
+    name = 'StalkersVsRoaches'
+    globals()[name] = type(name, (StalkersVsRoachesMap,), dict(filename=name))
 
-    save_dir = os.path.join('saves', save_name)
+    save_dir = os.path.join('saves', FLAGS.save_name)
+
     env_kwargs = {
-        'map_name': map_name,
+        'map_name': FLAGS.map,
         'players': [sc2_env.Agent(sc2_env.Race[FLAGS.agent_race])],
         'agent_interface_format': sc2_env.parse_agent_interface_format(
             feature_screen=FLAGS.feature_screen_size,
@@ -69,19 +77,21 @@ def main(unused_argv):
             rgb_minimap=FLAGS.rgb_minimap_size,
             action_space=FLAGS.action_space,
             use_feature_units=True),
-        'step_mul': step_mul,
+        'step_mul': FLAGS.step_mul,
         'game_steps_per_episode': FLAGS.game_steps_per_episode,
         'disable_fog': FLAGS.disable_fog,
-        'visualize': False,
-        'save_replay_episodes': 0,
+        'visualize': FLAGS.render,
+        'save_replay_episodes': FLAGS.save_replay_episodes,
         'replay_dir': os.path.join(save_dir, 'replays')
     }
 
-    if map_name in {'DefeatRoaches', 'StalkersVsRoaches'}:
+    if FLAGS.map in {'DefeatRoaches', 'StalkersVsRoaches'}:
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.RoachesEnvironmentInterface())
-    elif map_name == 'MoveToBeacon':
+    elif FLAGS.map == 'MoveToBeacon':
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.BeaconEnvironmentInterface())
-    elif map_name in {'BuildMarines', 'EconomicRLTraining'}:
+    elif FLAGS.map == 'DefeatZerglingsAndBanelings':
+        interface = interfaces.BanelingsEnvironmentInterface()
+    elif FLAGS.map == 'BuildMarines':
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.TrainMarines())
     else:
         raise Exception('Unsupported Map')
@@ -93,26 +103,33 @@ def main(unused_argv):
             f.write("%s, %s\n" % (key, FLAGS.__flags[key]._value))
         f.write('\n\n\n')
 
+    i = 0
     # Refresh environment every once in a while to deal with memory leak
-    for j in range(1):
+    load_model = FLAGS.load_model
+    while True:
+        num_instances = 1 if FLAGS.render else FLAGS.parallel
         environment = MultipleEnvironment(lambda: SCEnvironmentWrapper(interface, env_kwargs),
                                           num_instance=num_instances)
         agent = LSTMAgent(interface)
         learner = ActorCriticLearner(environment, agent,
-                                     run_name=save_name,
-                                     load_run_name=load_run_name,
-                                     gamma=0.95,
-                                     td_lambda=0.95,
-                                     learning_rate=0.0001,
-                                     load_body_only=load_body_only)
-        load_body_only = False
+                                     save_dir=save_dir,
+                                     load_model=load_model,
+                                     gamma=FLAGS.gamma,
+                                     td_lambda=FLAGS.td_lambda,
+                                     learning_rate=FLAGS.learning_rate)
+
         try:
-            for i in range(500):
+            for i in range(1000):
                 if FLAGS.max_episodes and i >= FLAGS.max_episodes:
                     break
                 learner.train_episode()
+                i += 1
         finally:
             environment.close()
+
+        if FLAGS.max_episodes and i >= FLAGS.max_episodes:
+            break
+        load_model = True
 
 
 if __name__ == "__main__":
