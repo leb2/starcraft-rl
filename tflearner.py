@@ -59,7 +59,9 @@ class ActorCriticLearner:
     """
     def __init__(self, environment, agent,
                  save_dir="./",
-                 load_model=False,
+                 load_dir=None,
+                 load_model=True,
+                 reinitialize_head=False,
                  gamma=0.96,
                  td_lambda=0.96,
                  learning_rate=0.0003):
@@ -77,11 +79,18 @@ class ActorCriticLearner:
         self.agent = agent
         self.discount_factor = gamma
         self.td_lambda = td_lambda
+        self.should_reinitialize_head = reinitialize_head
 
         self.save_dir = save_dir
         self.weights_path = os.path.join(save_dir, 'model.ckpt')
+        self.weights_load_path = None
+        if load_dir is not None:
+            self.weights_load_path = os.path.join(load_dir, 'model.ckpt')
+
         self.rewards_path = os.path.join(save_dir, 'rewards.txt')
         self.episode_counter = 0
+
+        self.copy_code()
 
         self.rollouts = [Rollout() for _ in range(self.num_games)]
         with self.agent.graph.as_default():
@@ -93,11 +102,21 @@ class ActorCriticLearner:
             self.saver = tf.train.Saver()
             if load_model:
                 try:
-                    self.load_model()
+                    self.load_model(self.weights_path)
                 except ValueError:
-                    pass
+                    try:
+                        self.load_model(self.weights_load_path)
+                    except ValueError:
+                        pass
             else:
                 open(self.rewards_path, 'w').close()
+
+    def copy_code(self):
+        code_dir = os.path.join(self.save_dir, 'code')
+        if not os.path.exists(code_dir):
+            os.makedirs(code_dir)
+        project_root = os.path.dirname(os.path.realpath(__file__))
+        os.system('cp -r ' + os.path.join(project_root, './*.py') + ' ' + code_dir)
 
     def train_episode(self):
         """ Trains the agent for single episode for each environment in the `MultipleEnvironment`.
@@ -146,12 +165,28 @@ class ActorCriticLearner:
         save_path = self.saver.save(self.session, self.weights_path)
         print("Model Saved in %s" % save_path)
 
-    def load_model(self):
+    def load_model(self, path):
         """
         Loads the model from weights stored in the current `save_path`.
         """
-        self.saver.restore(self.session, self.weights_path)
+        self.saver.restore(self.session, path)
+        if self.should_reinitialize_head:
+            self.reinitialize_head()
         print('Model Loaded')
+
+    def reinitialize_head(self):
+        print("Reinitializing head")
+        body_keywords = ["pointer_head/dense/", "pointer_head/dense_1/", "shared", "lstm"]
+        head_variables = [v for v in tf.trainable_variables() if not any([keyword in v.name for keyword in body_keywords])]
+        print("head variables are")
+        for var in head_variables:
+            print(var)
+
+        body_variables = [v for v in tf.trainable_variables() if any([keyword in v.name for keyword in body_keywords])]
+        print("Body variables are")
+        for var in body_variables:
+            print(var)
+        self.session.run(tf.initialize_variables(head_variables))
 
     def _log_data(self, reward):
         self.episode_counter += 1

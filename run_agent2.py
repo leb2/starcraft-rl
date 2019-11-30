@@ -66,6 +66,9 @@ def main(unused_argv):
     globals()[name] = type(name, (StalkersVsRoachesMap,), dict(filename=name))
 
     save_dir = os.path.join('saves', FLAGS.save_name)
+    load_dir = os.path.join('saves', 'stalkers1')
+    reinitialize_head = True
+    # load_dir = None
 
     env_kwargs = {
         'map_name': FLAGS.map,
@@ -87,7 +90,7 @@ def main(unused_argv):
 
     if FLAGS.map in {'DefeatRoaches', 'StalkersVsRoaches'}:
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.RoachesEnvironmentInterface())
-    elif FLAGS.map == 'MoveToBeacon':
+    elif FLAGS.map in {'CollectMineralShards', 'MoveToBeacon'}:
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.BeaconEnvironmentInterface())
     elif FLAGS.map == 'DefeatZerglingsAndBanelings':
         interface = interfaces.BanelingsEnvironmentInterface()
@@ -97,6 +100,7 @@ def main(unused_argv):
         raise Exception('Unsupported Map')
 
     pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
+
     run_info_path = os.path.join(save_dir, 'info.txt')
     with open(run_info_path, 'a') as f:
         for key in FLAGS.__flags:
@@ -113,11 +117,13 @@ def main(unused_argv):
         agent = LSTMAgent(interface)
         learner = ActorCriticLearner(environment, agent,
                                      save_dir=save_dir,
+                                     load_dir=load_dir,
                                      load_model=load_model,
                                      gamma=FLAGS.gamma,
                                      td_lambda=FLAGS.td_lambda,
-                                     learning_rate=FLAGS.learning_rate)
-
+                                     learning_rate=FLAGS.learning_rate,
+                                     reinitialize_head=reinitialize_head)
+        reinitialize_head = False
         try:
             for i in range(1000):
                 if FLAGS.max_episodes and i >= FLAGS.max_episodes:
