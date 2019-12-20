@@ -61,14 +61,25 @@ class StalkersVsRoachesMap(lib.Map):
     step_mul = 8
 
 
+class TacticalRLTrainingMap(lib.Map):
+    directory = "mini_games"
+    download = "https://github.com/deepmind/pysc2#get-the-maps"
+    players = 1
+    score_index = 0
+    game_steps_per_episode = 0
+    step_mul = 8
+
+
 def main(unused_argv):
+    name = 'TacticalRLTraining'
+    globals()[name] = type(name, (TacticalRLTrainingMap,), dict(filename=name))
     name = 'StalkersVsRoaches'
     globals()[name] = type(name, (StalkersVsRoachesMap,), dict(filename=name))
 
     save_dir = os.path.join('saves', FLAGS.save_name)
-    load_dir = os.path.join('saves', 'stalkers1')
-    reinitialize_head = True
-    # load_dir = None
+    # load_dir = os.path.join('saves', 'stalkers1')
+    reinitialize_head = False
+    load_dir = None
 
     env_kwargs = {
         'map_name': FLAGS.map,
@@ -94,7 +105,7 @@ def main(unused_argv):
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.BeaconEnvironmentInterface())
     elif FLAGS.map == 'DefeatZerglingsAndBanelings':
         interface = interfaces.BanelingsEnvironmentInterface()
-    elif FLAGS.map == 'BuildMarines':
+    elif FLAGS.map in {'TacticalRLTraining', 'EconomicRLTraining','BuildMarines'}:
         interface = interfaces.EmbeddingInterfaceWrapper(interfaces.TrainMarines())
     else:
         raise Exception('Unsupported Map')

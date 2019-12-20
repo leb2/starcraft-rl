@@ -81,6 +81,7 @@ class InterfaceAgent(ActorCriticAgent, ABC):
         self.num_screen_dims = int(len(self.interface.screen_dimensions) / 2)
 
         self.state_input = tf.placeholder(tf.float32, [None, *self.interface.state_shape])  # [batch, *state_shape]
+        self.other_features_input = tf.placeholder(tf.float32, [None, 1])
         self.mask_input = tf.placeholder(tf.float32, [None, self.interface.num_actions])  # [batch, num_actions]
         self.action_input = tf.placeholder(tf.int32, [None])  # [T]
         self.spacial_input = tf.placeholder(tf.int32, [None, 2])  # [T, 2]   dimension size 2 for x and y
@@ -192,7 +193,6 @@ class LSTMAgent(InterfaceAgent):
 
         # TODO: Add in previous action index as an input
         self.prev_action_input = tf.placeholder(tf.int32, [None], name='prev_action_input')
-
         self.features = self.features()  # Shape [batch_size, num_features]
 
         lstm_output, self.next_lstm_state = self._lstm_step()
@@ -213,7 +213,7 @@ class LSTMAgent(InterfaceAgent):
     def features(self):
         conv_features = parts.conv_body(self.state_input)
         unit_features = tf.reduce_sum(self.self_attention(self.unit_embeddings_input, bias=0), axis=1)
-        return tf.concat([conv_features, unit_features], axis=1)
+        return tf.concat([conv_features, unit_features, self.other_features_input], axis=1)
 
     def step(self, states, masks, memory):
         """
@@ -228,7 +228,7 @@ class LSTMAgent(InterfaceAgent):
 
         feed_dict = {
             **self.get_feed_dict(states, masks),
-            self.memory_input: memory
+            # self.memory_input: memory
         }
         results = self.session.run(
             [self.next_lstm_state, self.nonspacial_probs, self.unit_selection_probs,
@@ -244,25 +244,30 @@ class LSTMAgent(InterfaceAgent):
                                                    spacial_probs_y, selection_probs, unit_coords), next_lstm_state
 
     def _lstm_step(self):
-        state_tuple = tf.unstack(self.memory_input, axis=0)
-        flattened_state = self.features
-        lstm_output, next_state_tuple = self.lstm(flattened_state, state=state_tuple)
-        next_state = tf.stack(next_state_tuple, axis=0)
-        return lstm_output, next_state
+        return self.features, tf.zeros(0)
+        # Removed the lstm stuff temporarily
+        # state_tuple = tf.unstack(self.memory_input, axis=0)
+        # flattened_state = self.features
+        # lstm_output, next_state_tuple = self.lstm(flattened_state, state=state_tuple)
+        # next_state = tf.stack(next_state_tuple, axis=0)
+        # return lstm_output, next_state
 
     def _lstm_step_train(self):
-        flattened_state = tf.expand_dims(self.features, axis=0)
-        train_output, _ = tf.nn.dynamic_rnn(self.lstm, flattened_state, dtype=tf.float32)
-        return tf.squeeze(train_output, axis=0)
+        return self.features
+        # Removed the lstm stuff temporarily
+        # flattened_state = tf.expand_dims(self.features, axis=0)
+        # train_output, _ = tf.nn.dynamic_rnn(self.lstm, flattened_state, dtype=tf.float32)
+        # return tf.squeeze(train_output, axis=0)
 
     def get_feed_dict(self, states, masks, actions=None, bootstrap_state=None):
         screens = np.stack([state['screen'] for state in states], axis=0)
+
         feed_dict = {
-            self.state_input: np.array(states),
             self.mask_input: np.array(masks),
         }
         all_states = states if bootstrap_state is None else [*states, bootstrap_state]
         unit_embeddings = util.pad_stack([state['unit_embeddings'] for state in all_states], pad_axis=0, stack_axis=0)
+        feed_dict[self.other_features_input] = np.stack([state['other_features'] for state in all_states], axis=0)
         feed_dict[self.unit_embeddings_input] = unit_embeddings
 
         if bootstrap_state is not None:

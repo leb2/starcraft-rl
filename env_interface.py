@@ -92,6 +92,7 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
         ])
         return {
             "screen": state,
+            "other_features": [-1],  # Timestep gets put into the first position
             "unit_embeddings": self._get_unit_embeddings(timestep, self._get_embedding_columns()),
             "unit_coords": self._get_unit_embeddings(timestep, coord_columns)
         }, self._augment_mask(timestep, action_mask)
@@ -101,6 +102,7 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
         state, action_mask = self.interface.dummy_state()
         return {
             "screen": state,
+            "other_features": [-1, 2],
             "unit_embeddings": np.zeros((num_units, self.unit_embedding_size)),
             "unit_coords": np.zeros((num_units, 2 + len(static_data.UNIT_TYPES)))
         }, action_mask
@@ -118,7 +120,7 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
 
     def _get_unit_embeddings(self, timestep, useful_columns):
         unit_info = np.array(timestep.observation.feature_units)
-        if True or unit_info.shape[0] == 0:
+        if unit_info.shape[0] == 0:
             # Set to 1 instead of 0 so no empty embedding situation. Zeros are treated as masked so this is okay.
             return np.zeros((1, self.unit_embedding_size))
         adjusted_info = unit_info[:, np.array(useful_columns)]

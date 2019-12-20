@@ -4,8 +4,9 @@ import numpy as np
 import os
 import argparse
 import matplotlib
-matplotlib.use("TkAgg")
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
+plt.style.use('ggplot')
 
 parser = argparse.ArgumentParser(description='Graph rewards')
 parser.add_argument('name', nargs='?', default='recent', help='Name of directory in ./saves to find rewards')
@@ -20,11 +21,11 @@ with open(rewards_path, 'r') as f:
     for line in f:
         rewards.append(float(line))
 rewards = np.array(rewards)
-rewards[rewards < 0] = 0
+# rewards[rewards < 0] = 0
 smooth_n = args.smooth
 smoothed_rewards = []
 
-for i in range(len(rewards)):
+for i in range(30, len(rewards)):
     section = rewards[max(0, i-smooth_n):i+1]
     smoothed_rewards.append(np.sum(section) / len(section))
 

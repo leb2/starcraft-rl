@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 
-def conv_body(state, filters=(16,), kernel_sizes=(3,), strides=(3,), output_size=64):
+def conv_body(state, filters=(32, 16), kernel_sizes=(5, 5), strides=(3, 3), output_size=64):
     """
     Assumes the state shape is 3 dimensional. Applies some number of convolution layers, followed by a single
     dense layer.
@@ -19,10 +19,13 @@ def conv_body(state, filters=(16,), kernel_sizes=(3,), strides=(3,), output_size
     with tf.variable_scope('ac_shared', reuse=tf.AUTO_REUSE):
         for i, filters, kernel_size, strides in architecture:
             logits = tf.layers.conv2d(logits, filters, kernel_size, strides, activation=tf.nn.leaky_relu,
-                                      kernel_initializer=tf.truncated_normal_initializer(stddev=0.01),
+                                      kernel_initializer=tf.truncated_normal_initializer(stddev=0.0001),
                                       name='conv%d' % i)
         logits = tf.layers.flatten(logits)
+
+        # Two dense layers
         logits = tf.layers.dense(logits, units=output_size, activation=tf.nn.leaky_relu, name='d1')
+        logits = tf.layers.dense(logits, units=output_size, activation=tf.nn.leaky_relu, name='d2')
 
     logits = tf.reshape(logits, [-1, output_size])
     return logits

@@ -84,6 +84,7 @@ class SCEnvironmentWrapper:
         self.agent_interface = agent_interface
         self.done = False
         self.timestep = None
+        self.timestep_index = 0
         flags.FLAGS(sys.argv)
 
     def step(self, action):
@@ -108,18 +109,22 @@ class SCEnvironmentWrapper:
             self.timestep = self.env.step([action])[0]
             if self.render:
                 time.sleep(0.15)
+            self.timestep_index += 1
 
             total_reward += self.timestep.reward
             self.done = int(self.timestep.step_type == StepType.LAST)
             state, action_mask = self.agent_interface.convert_state(self.timestep)
+            state['other_features'][0] = self.timestep_index
 
             action = actions.send(self.timestep)
             if self.done or action is None:
                 return state, action_mask, total_reward, int(self.done)
 
     def reset(self):
+        self.timestep_index = 0
         timestep = self.env.reset()[0]
         state, action_mask = self.agent_interface.convert_state(timestep)
+        state['other_features'][0] = self.timestep_index
         self.timestep = timestep
         self.done = False
         return state, action_mask,  0, int(self.done)
