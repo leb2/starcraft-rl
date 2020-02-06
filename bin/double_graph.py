@@ -38,9 +38,14 @@ def get_smoothed_rewards(name):
     return smoothed_rewards
 
 for name in args.names:
+    if "," in name:
+        name, display_name = name.split(",")
+    else:
+        display_name = name
     smoothed_rewards = get_smoothed_rewards(name)
-    plt.plot(smoothed_rewards, label=name)
+    plt.plot(smoothed_rewards, label=display_name)
     plt.legend()
+
 # smoothed_rewards2 = get_smoothed_rewards(args.name2)
 #
 # plt.plot(smoothed_rewards1, label=args.name1)

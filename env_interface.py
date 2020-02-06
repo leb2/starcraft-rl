@@ -102,7 +102,7 @@ class EmbeddingInterfaceWrapper(EnvironmentInterface):
         state, action_mask = self.interface.dummy_state()
         return {
             "screen": state,
-            "other_features": [-1, 2],
+            "other_features": [-1],
             "unit_embeddings": np.zeros((num_units, self.unit_embedding_size)),
             "unit_coords": np.zeros((num_units, 2 + len(static_data.UNIT_TYPES)))
         }, action_mask

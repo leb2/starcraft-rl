@@ -145,17 +145,19 @@ class ActorCriticLearner:
         states, masks, _, _ = self.env.reset()
         memory = None
         while True:
-            action_indices, memory = self.agent.step(states, masks, memory)
+            used_states, action_indices, memory = self.agent.step(states, masks, memory)
             new_states, new_masks, rewards, dones = self.env.step(action_indices)
 
             for i, rollout in enumerate(self.rollouts):
-                rollout.add_step(states[i], action_indices[i], rewards[i], masks[i], dones[i])
+                rollout.add_step(used_states[i], action_indices[i], rewards[i], masks[i], dones[i])
             states = new_states
             masks = new_masks
             if all(dones):
                 # Add in the done state for rollouts which just finished for calculating the bootstrap value.
+                used_states, _, _ = self.agent.step(states, masks, memory)
                 for i, rollout in enumerate(self.rollouts):
-                    rollout.add_step(states[i])
+                    # step one last time to generate the memory (used_state) for the last state
+                    rollout.add_step(used_states[i])
                 return
 
     def save_model(self):
