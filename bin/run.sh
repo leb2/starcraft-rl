@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-python -m run_agent2 \
+python -m run_agent \
 --map BuildMarines \
---save_name buildmarines1 \
+--save_name buildmarines3 \
 --load_model \
 --norender \
---step_mul 64 \
+--step_mul 24 \
 --parallel 8 \
 --save_replay_episodes 0 \
 --gamma 0.92 \
