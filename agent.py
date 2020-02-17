@@ -6,6 +6,8 @@ from env_interface import ParamType
 import util
 import parts
 from attention import SelfAttention
+use_lstm = False
+np.set_printoptions(precision=2, suppress=True)
 
 
 class ActorCriticAgent(ABC):
@@ -213,6 +215,7 @@ class LSTMAgent(InterfaceAgent):
         unit_features = tf.reduce_sum(self.self_attention(self.unit_embeddings_input, bias=0), axis=1)
         logits = tf.concat([conv_features, unit_features, self.other_features_input], axis=1)
         logits = tf.layers.dense(logits, units=200, activation=tf.nn.leaky_relu, name='feature_layer')
+        logits = tf.layers.dense(logits, units=200, activation=tf.nn.tanh, name='feature_layer2')
         return logits
 
     def step(self, states, masks, memories):
@@ -233,11 +236,16 @@ class LSTMAgent(InterfaceAgent):
                 })
         for state, memory in zip(states, memories):
             state['prev_action'] = memory['prev_action']
-        feed_dict = {
-            **self.get_feed_dict(states, masks),
-            # Pub back for lstm
-            self.memory_input: memory['next_lstm_state']
-        }
+
+        if use_lstm:
+            feed_dict = {
+                **self.get_feed_dict(states, masks),
+                self.memory_input: memory['next_lstm_state']
+            }
+        else:
+            feed_dict = {
+                **self.get_feed_dict(states, masks),
+            }
         results = self.session.run(
             [self.next_lstm_state, self.nonspacial_probs, self.unit_selection_probs,
              *self.spacial_probs_x, *self.spacial_probs_y], feed_dict)
@@ -260,21 +268,29 @@ class LSTMAgent(InterfaceAgent):
         return states, sampled_action, next_memories
 
     def _lstm_step(self):
-        # return self.features, tf.zeros(0)
-
-        # Removed the lstm stuff temporarily
-        state_tuple = tf.unstack(self.memory_input, axis=0)
-        flattened_state = self.features
-        lstm_output, next_state_tuple = self.lstm(flattened_state, state=state_tuple)
-        next_state = tf.stack(next_state_tuple, axis=0)
-        return lstm_output, next_state
+        if use_lstm:
+            state_tuple = tf.unstack(self.memory_input, axis=0)
+            flattened_state = self.features
+            lstm_output, next_state_tuple = self.lstm(flattened_state, state=state_tuple)
+            next_state = tf.stack(next_state_tuple, axis=0)
+            return lstm_output, next_state
+        else:
+            return self.features, tf.zeros(0)
+            # memory = tf.zeros([2, 1, self.rnn_size], tf.float32)
+            # state_tuple = tf.unstack(memory, axis=0)
+            # return self.lstm(self.features, state=state_tuple)[0], tf.zeros(0)
 
     def _lstm_step_train(self):
-        # return self.features
-        # Removed the lstm stuff temporarily
-        flattened_state = tf.expand_dims(self.features, axis=0)
-        train_output, _ = tf.nn.dynamic_rnn(self.lstm, flattened_state, dtype=tf.float32)
-        return tf.squeeze(train_output, axis=0)
+        if use_lstm:
+            # Removed the lstm stuff temporarily
+            flattened_state = tf.expand_dims(self.features, axis=0)
+            train_output, _ = tf.nn.dynamic_rnn(self.lstm, flattened_state, dtype=tf.float32)
+            return tf.squeeze(train_output, axis=0)
+        else:
+            # memory = tf.zeros([2, 1, self.rnn_size], tf.float32)
+            # state_tuple = tf.unstack(memory, axis=0)
+            # return self.lstm(self.features, state=state_tuple)[0]
+            return self.features
 
     def get_feed_dict(self, states, masks, actions=None, bootstrap_state=None):
         screens = np.stack([state['screen'] for state in states], axis=0)
@@ -287,11 +303,15 @@ class LSTMAgent(InterfaceAgent):
 
         other_features = np.stack([state['other_features'] for state in all_states], axis=0)
         # for state in all_states:
-        #     print("This is the state")
-        #     print(state)
-        #     print("This is the prev_action")
-        #     print(state['prev_action'])
-        #     print()
+            # print("This is the state")
+            # print(state)
+            # print("This is the prev_action")
+            # print(state['prev_action'])
+            # if len(masks) == 1:
+            #     print("this is the mask: ")
+            #     print(masks)
+            # print(masks)
+            # print()
         prev_action_onehot = np.stack([state['prev_action'] for state in all_states], axis=0)
 
         all_other_features = np.concatenate([other_features, prev_action_onehot], axis=-1)
@@ -329,6 +349,9 @@ class LSTMAgent(InterfaceAgent):
         unit_distribution is an array of shape [num_games, num_select_actions, num_units]
         :return: Generates an list of action index tuple of type (nonspacial_index, (spacial_x, spacial_y))
         """
+        # print("nonspatial probs are")
+        # print(nonspacial_probs)
+
         actions = self.sample_action_index(nonspacial_probs, spacial_probs_x, spacial_probs_y)
         num_units = unit_distribution.shape[2]
         new_actions = []
